@@ -1,0 +1,64 @@
+version: '3.9'
+
+services:
+  chromadb:
+    image: chromadb/chroma:0.5.4
+    container_name: chromadb
+    restart: unless-stopped
+    environment:
+      # Ensure persistence on disk
+      - CHROMA_DB_IMPL=duckdb+parquet
+      - PERSIST_DIRECTORY=/data
+    volumes:
+      - chroma-data:/data
+    ports:
+      - "8001:8000"  # host:container
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/collections" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: rag-app
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CHROMA_COLLECTION=utkrusht_docs
+      # If you change EMBEDDING_MODEL_NAME, you MUST also rebuild embeddings
+      - EMBEDDING_MODEL_NAME=
+      - EMBEDDING_CONFIG_VERSION=v1
+      - LOG_LEVEL=INFO
+    ports:
+      - "8080:8080"
+
+  init-service:
+    build:
+      context: .
+      dockerfile: init_service/Dockerfile
+    container_name: rag-init
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - CHROMA_COLLECTION=utkrusht_docs
+      - EMBEDDING_MODEL_NAME=
+      - EMBEDDING_CONFIG_VERSION=v1
+      - REBUILD_ON_EMBEDDING_MISMATCH=true
+      - LOG_LEVEL=INFO
+    volumes:
+      # Mount documentation into the init container for ingestion
+      - ./data/docs:/app/data/docs:ro
+    command: ["python", "-m", "init_service.init_embeddings"]
+    restart: "no"
+
+volumes:
+  chroma-data:
